@@ -1,0 +1,7 @@
+[submodule "teavm-javac"]
+	path = submodules/teavm-javac
+	url = https://github.com/Vsprocessing/teavm-javac
+
+[submodule "eclipse.jdt.ls-web"]
+	path = submodules/eclipse.jdt.ls-web
+	url = https://github.com/Vsprocessing/eclipse.jdt.ls-web
