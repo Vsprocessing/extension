@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<style>
+		html, body {
+			height: 100%;
+			margin: 0;
+			padding: 0;
+			background: transparent;
+			color: var(--vscode-foreground);
+			font-family: var(--vscode-font-family);
+			font-size: var(--vscode-font-size);
+		}
+		.controls {
+			box-sizing: border-box;
+			min-height: 100vh;
+			display: flex;
+			flex-direction: column;
+			gap: 10px;
+			padding: 8px 12px 10px;
+		}
+		.main, .bottom {
+			display: flex;
+			flex-direction: column;
+			gap: 8px;
+		}
+		.bottom {
+			margin-top: auto;
+			padding-top: 10px;
+		}
+		label {
+			display: flex;
+			flex-direction: column;
+			gap: 4px;
+			color: var(--vscode-descriptionForeground);
+			font-size: 11px;
+			line-height: 1.35;
+		}
+		select, button {
+			box-sizing: border-box;
+			width: 100%;
+			font: inherit;
+		}
+		select {
+			min-height: 26px;
+			border: 1px solid var(--vscode-dropdown-border);
+			border-radius: 2px;
+			padding: 3px 8px;
+			background: var(--vscode-dropdown-background);
+			color: var(--vscode-dropdown-foreground);
+		}
+		button {
+			display: flex;
+			justify-content: center;
+			align-items: center;
+			min-height: 28px;
+			border: 1px solid var(--vscode-button-border, transparent);
+			border-radius: 4px;
+			padding: 4px 8px;
+			background-color: var(--vscode-button-background);
+			color: var(--vscode-button-foreground);
+			text-align: center;
+			line-height: 16px;
+			font-size: 12px;
+			cursor: pointer;
+			overflow-wrap: normal;
+		}
+		button:hover:not(:disabled) {
+			background-color: var(--vscode-button-hoverBackground);
+			text-decoration: none;
+		}
+		button:focus-visible, select:focus-visible {
+			outline: 1px solid var(--vscode-focusBorder);
+			outline-offset: 2px;
+		}
+		button.secondary {
+			border-color: var(--vscode-button-secondaryBorder, var(--vscode-button-border, transparent));
+			background-color: var(--vscode-button-secondaryBackground);
+			color: var(--vscode-button-secondaryForeground);
+		}
+		button.secondary:hover:not(:disabled) {
+			background-color: var(--vscode-button-secondaryHoverBackground);
+		}
+		button:disabled {
+			opacity: 0.4;
+			cursor: default;
+		}
+		.status, .warning {
+			color: var(--vscode-descriptionForeground);
+			font-size: 11px;
+			line-height: 1.35;
+		}
+		.warning {
+			color: var(--vscode-editorWarning-foreground);
+		}
+	</style>
+</head>
+<body>
+	<div class="controls">
+		<div class="main">
+			<label>
+				Language
+				<select id="mode" aria-label="Language">
+					<option value="processing">Processing</option>
+					<option value="java">Java</option>
+				</select>
+			</label>
+			<button id="compile" type="button">Compile</button>
+			<button id="run" type="button">Run</button>
+			<button id="stop" class="secondary" type="button">Stop</button>
+			<div id="status" class="status"></div>
+			<div id="warning" class="warning"></div>
+		</div>
+		<div class="bottom">
+			<button id="browseAssignments" class="secondary" type="button">Browse Assignments</button>
+			<button id="exportWebsite" class="secondary" type="button">Export Website</button>
+			<button id="processingReference" class="secondary" type="button">Open Processing Reference</button>
+			<button id="apcsaReference" class="secondary" type="button">Open APCSA Reference</button>
+		</div>
+	</div>
+	<script nonce="{{nonce}}">
+		const vscode = acquireVsCodeApi();
+		const state = JSON.parse("{{initialState}}");
+		const buttons = {
+			compile: document.getElementById('compile'),
+			run: document.getElementById('run'),
+			stop: document.getElementById('stop'),
+			browseAssignments: document.getElementById('browseAssignments'),
+			exportWebsite: document.getElementById('exportWebsite'),
+			processingReference: document.getElementById('processingReference'),
+			apcsaReference: document.getElementById('apcsaReference')
+		};
+		const mode = document.getElementById('mode');
+		const status = document.getElementById('status');
+		const warning = document.getElementById('warning');
+
+		function setDisabled(element, disabled) {
+			if (element) {
+				element.disabled = disabled;
+			}
+		}
+
+		function setHidden(element, hidden) {
+			if (element) {
+				element.hidden = hidden;
+			}
+		}
+
+		function setText(element, text) {
+			if (element) {
+				element.textContent = text;
+			}
+		}
+
+		function onClick(element, callback) {
+			if (element) {
+				element.addEventListener('click', callback);
+			}
+		}
+
+		function applyState(next) {
+			Object.assign(state, next);
+			if (mode) {
+				mode.value = state.mode || 'processing';
+				mode.disabled = state.isCompiling || state.isRunning;
+			}
+			setDisabled(buttons.compile, !state.hasSources || state.isCompiling || state.isRunning);
+			setDisabled(buttons.run, !state.hasSources || !state.hasCompiled || state.isCompiling || state.isRunning);
+			setDisabled(buttons.stop, !state.isRunning);
+			setDisabled(buttons.exportWebsite, state.mode !== 'processing' || !state.hasSources || state.isCompiling || state.isRunning);
+			setText(status, state.status || '');
+			setText(warning, state.warning || '');
+			setHidden(warning, !state.warning);
+		}
+
+		onClick(buttons.compile, () => vscode.postMessage({ type: 'compile' }));
+		onClick(buttons.run, () => vscode.postMessage({ type: 'run' }));
+		onClick(buttons.stop, () => vscode.postMessage({ type: 'stop' }));
+		onClick(buttons.browseAssignments, () => vscode.postMessage({ type: 'openAssignments' }));
+		onClick(buttons.exportWebsite, () => vscode.postMessage({ type: 'exportWebsite' }));
+		onClick(buttons.processingReference, () => vscode.postMessage({ type: 'openReference' }));
+		onClick(buttons.apcsaReference, () => vscode.postMessage({ type: 'openApcsaReference' }));
+		if (mode) {
+			mode.addEventListener('change', () => vscode.postMessage({ type: 'mode', mode: mode.value }));
+		}
+		window.addEventListener('message', event => {
+			if (event.data?.type === 'state') {
+				applyState(event.data.state);
+			}
+		});
+		applyState(state);
+	</script>
+</body>
+</html>

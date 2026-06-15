@@ -1,0 +1,47 @@
+{
+  "name": "@worldeditaxe/teavm-javac",
+  "version": "0.1.3",
+  "description": "Browser Java and Processing compiler powered by javac and TeaVM.",
+  "type": "module",
+  "types": "./teavm-javac.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "sideEffects": false,
+  "files": [
+    "*.js",
+    "*.d.ts",
+    "*.wasm",
+    "*.map",
+    "*.teadbg",
+    "*.bin",
+    "*.jar",
+    "package.json",
+    "tsconfig.json"
+  ],
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  },
+  "exports": {
+    ".": {
+      "types": "./teavm-javac.d.ts",
+      "default": "./teavm-javac.js"
+    },
+    "./processing": {
+      "types": "./processing-teavm.d.ts",
+      "default": "./processing-teavm.js"
+    },
+    "./processing-worker": {
+      "default": "./processing-teavm-worker.js"
+    },
+    "./compiler.js": "./compiler.js",
+    "./compiler.wasm": "./compiler.wasm",
+    "./compiler.wasm-runtime.js": "./compiler.wasm-runtime.js",
+    "./compiler.wasm-deobfuscator.wasm": "./compiler.wasm-deobfuscator.wasm",
+    "./compile-classlib-teavm.bin": "./compile-classlib-teavm.bin",
+    "./runtime-classlib-teavm.bin": "./runtime-classlib-teavm.bin",
+    "./processing-core-teavm.jar": "./processing-core-teavm.jar",
+    "./package.json": "./package.json"
+  }
+}

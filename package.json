@@ -1,0 +1,254 @@
+{
+  "name": "webprocessing",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "10.0.0",
+  "publisher": "CloudTronUSA",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "extensionKind": [
+    "ui",
+    "workspace"
+  ],
+  "capabilities": {
+    "virtualWorkspaces": false,
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
+  "main": "./out/extension",
+  "browser": "./dist/browser/extension",
+  "activationEvents": [
+    "onStartupFinished",
+    "onView:webprocessing.controls",
+    "onView:webprocessing.assignments",
+    "onCommand:webprocessing.compile",
+    "onCommand:webprocessing.run",
+    "onCommand:webprocessing.stop",
+    "onCommand:webprocessing.exportWebsite",
+    "onCommand:webprocessing.openReference",
+    "onCommand:webprocessing.openApcsaReference",
+    "onCommand:webprocessing.openReferenceSheet",
+    "onCommand:webprocessing.refreshAssignments",
+    "onCustomEditor:webprocessing.csptAssignment"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "java",
+        "extensions": [
+          ".java",
+          ".pde"
+        ]
+      },
+      {
+        "id": "cspt",
+        "extensions": [
+          ".cspt"
+        ],
+        "icon": {
+          "light": "./media/icons/cspt.svg",
+          "dark": "./media/icons/cspt.svg"
+        }
+      }
+    ],
+    "configurationDefaults": {
+      "files.associations": {
+        "*.pde": "java"
+      }
+    },
+    "configuration": {
+      "title": "%configuration.title%",
+      "properties": {
+        "webprocessing.processingOutput": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "wasm-gc",
+            "js"
+          ],
+          "enumItemLabels": [
+            "auto (use fastest option)",
+            "wasm-gc (faster)",
+            "js (more compatible)"
+          ],
+          "markdownDescription": "%configuration.processingOutput.markdownDescription%",
+          "scope": "resource",
+          "order": 10
+        }
+      }
+    },
+    "views": {
+      "webprocessing": [
+        {
+          "id": "webprocessing.controls",
+          "name": "%view.controls.name%",
+          "type": "webview",
+          "visibility": "visible"
+        }
+      ],
+      "webprocessingAssignments": [
+        {
+          "id": "webprocessing.assignments",
+          "name": "%view.assignments.name%",
+          "type": "webview",
+          "visibility": "visible"
+        }
+      ]
+    },
+    "customEditors": [
+      {
+        "viewType": "webprocessing.csptAssignment",
+        "displayName": "CSPT Assignment",
+        "selector": [
+          {
+            "filenamePattern": "*.cspt"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "webprocessing.compile",
+        "title": "%command.compile%",
+        "category": "%command.category%",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "webprocessing.run",
+        "title": "%command.run%",
+        "category": "%command.category%",
+        "icon": "$(play)"
+      },
+      {
+        "command": "webprocessing.stop",
+        "title": "%command.stop%",
+        "category": "%command.category%",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "webprocessing.exportWebsite",
+        "title": "%command.exportWebsite%",
+        "category": "%command.category%",
+        "icon": "$(export)"
+      },
+      {
+        "command": "webprocessing.openReference",
+        "title": "%command.openReference%",
+        "category": "%command.category%",
+        "icon": "$(references)"
+      },
+      {
+        "command": "webprocessing.openApcsaReference",
+        "title": "%command.openApcsaReference%",
+        "category": "%command.category%",
+        "icon": "$(references)"
+      },
+      {
+        "command": "webprocessing.openReferenceSheet",
+        "title": "%command.openReferenceSheet%",
+        "category": "%command.category%",
+        "icon": "$(references)"
+      },
+      {
+        "command": "webprocessing.refreshAssignments",
+        "title": "%command.refreshAssignments%",
+        "category": "%command.category%",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "webprocessing.compile",
+          "when": "workspaceFolderCount != 0 && !webprocessing.isCompiling && !webprocessing.isRunning"
+        },
+        {
+          "command": "webprocessing.run",
+          "when": "webprocessing.hasCompiled && !webprocessing.isCompiling && !webprocessing.isRunning"
+        },
+        {
+          "command": "webprocessing.stop",
+          "when": "webprocessing.isRunning"
+        },
+        {
+          "command": "webprocessing.exportWebsite",
+          "when": "workspaceFolderCount != 0 && !webprocessing.isCompiling && !webprocessing.isRunning"
+        },
+        {
+          "command": "webprocessing.openReference"
+        },
+        {
+          "command": "webprocessing.openApcsaReference"
+        },
+        {
+          "command": "webprocessing.openReferenceSheet"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "webprocessing.refreshAssignments",
+          "when": "view == webprocessing.assignments",
+          "group": "navigation"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "webprocessing",
+          "title": "%container.title%",
+          "icon": "$(symbol-event)"
+        },
+        {
+          "id": "webprocessingAssignments",
+          "title": "%container.assignments.title%",
+          "icon": "$(checklist)"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "gulp compile-extension:webprocessing",
+    "watch": "gulp watch-extension:webprocessing",
+    "vscode:prepublish": "npm run build-ext && npm run build-web",
+    "build-ext": "node ../../node_modules/gulp/bin/gulp.js --gulpfile ../../build/gulpfile.extensions.mjs compile-extension:webprocessing ./tsconfig.json",
+    "build-web": "node ./esbuild.browser.mts",
+    "compile-web": "npm-run-all2 -lp bundle-web typecheck-web",
+    "bundle-web": "node ./esbuild.browser.mts",
+    "typecheck-web": "tsgo --project ./tsconfig.browser.json --noEmit",
+    "watch-web": "npm-run-all2 -lp watch-bundle-web watch-typecheck-web",
+    "watch-bundle-web": "node ./esbuild.browser.mts --watch",
+    "watch-typecheck-web": "tsgo --project ./tsconfig.browser.json --noEmit --watch",
+    "serve-web": "vscode-test-web --extensionDevelopmentPath=. --browser chromium --port 3000 --open-devtools",
+    "dev:web": "npm run build-web && npm-run-all2 -lp watch-web serve-web"
+  },
+  "dependencies": {
+    "@noble/ciphers": "^2.2.0",
+    "@noble/hashes": "^2.2.0",
+    "@types/node": "^25.9.2",
+    "@worldeditaxe/teavm-javac": "https://github.com/WorldEditAxe/teavm-javac/releases/download/v0.1.3/worldeditaxe-teavm-javac-0.1.3.tgz",
+    "eclipse-jdt-ls-web": "https://github.com/CloudTronUSA/eclipse.jdt.ls-web/releases/download/v0.1.1/eclipse-jdt-ls-web-1.59.0-SNAPSHOT.tgz",
+    "pdfjs-dist": "^6.0.227"
+  },
+  "devDependencies": {
+    "@types/vscode": "1.100.0",
+    "@typescript/native-preview": "^7.0.0-dev.20260527",
+    "@vscode/test-web": "^0.0.80",
+    "esbuild": "^0.27.2",
+    "npm-run-all2": "^8.0.4",
+    "path-browserify": "^1.0.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/microsoft/vscode.git"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "displayName": "Web Processing",
+  "description": "Write, compile and run Java/Processing code in the browser.",
+  "container.title": "Processing",
+  "container.assignments.title": "Assignments",
+  "view.controls.name": "Processing",
+  "view.assignments.name": "Assignments",
+  "command.category": "Processing",
+  "command.compile": "Compile",
+  "command.run": "Run",
+  "command.stop": "Stop",
+  "command.exportWebsite": "Export Website",
+  "command.openReference": "Open Processing Reference",
+  "command.openApcsaReference": "Open APCSA Reference",
+  "command.openReferenceSheet": "Open Reference Sheet...",
+  "command.refreshAssignments": "Refresh",
+  "configuration.title": "Web Processing",
+  "configuration.processingOutput.markdownDescription": "Before your code can run in a browser, we have to translate your Java code into something that the browser can understand. WASM-GC translates your Java code to code that runs very fast, but can only be understood by the newest browsers. JS (JavaScript) runs in all browsers, but can be slower than WASM-GC.\n\nLeave this set to 'auto' if you don't know what you are doing!"
+}

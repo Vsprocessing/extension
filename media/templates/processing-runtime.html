@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; script-src 'nonce-{{nonce}}' 'unsafe-eval' 'wasm-unsafe-eval' {{cspSource}}; connect-src {{cspSource}};">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<style>
+		html, body { height: 100%; margin: 0; overflow: hidden; background: var(--vscode-editor-background); color: var(--vscode-foreground); font-family: var(--vscode-font-family); }
+		#root { height: 100%; display: grid; grid-template-rows: 1fr auto; }
+		#sketch { min-height: 0; display: grid; place-items: center; overflow: hidden; }
+		#status { border-top: 1px solid var(--vscode-panel-border); padding: 6px 8px; color: var(--vscode-descriptionForeground); font-size: 12px; }
+		canvas { display: block; outline: 1px solid var(--vscode-panel-border); }
+	</style>
+</head>
+<body>
+	<div id="root">
+		<div id="sketch"></div>
+		<div id="status">Loading...</div>
+	</div>
+	<script nonce="{{nonce}}">
+		const vscode = acquireVsCodeApi();
+		const payload = JSON.parse("{{payload}}");
+		const sketch = document.getElementById('sketch');
+		const status = document.getElementById('status');
+
+		// this is some sick shit
+		// the run function is async. it will try to start the run after fetching even if the user pressed Stop or closed the panel.
+		// so to address this, we capture the current generation when run is called.
+		// when we stop, we increment the generation.
+		// when the fetches complete and we're about to start, we check if the generation is still the same.
+		// if not, we know the user has stopped or restarted the sketch, so we abort starting.
+		let generation = 0;
+
+		let canvasBackend;
+		let program;
+		let sketchInstance;
+		let canvasObserver;
+		let resolveWasmBytes;
+		let nextHostRequestId = 1;
+		const hostRequests = new Map();
+
+		const wasmBytesFromHost = new Promise(resolve => {
+			resolveWasmBytes = resolve;
+		});
+
+		const send = message => vscode.postMessage({ ...message, runId: payload.runId });
+
+		// error handling stuff
+		const convToString = value => {
+			if (typeof value === 'string') return value;
+			try { return JSON.stringify(value); } catch { return String(value); }
+		};
+		const formatError = value => {	// turn errors into nice V8 style
+			if (!(value instanceof Error) || !value.stack) {
+				return convToString(value);
+			}
+
+			const header = value.name + ': ' + value.message;
+			const stack = String(value.stack);
+			return stack.startsWith(value.name)
+				? stack.startsWith(header) 	// v8 errors
+				    ? stack	// first line of stack already includes the error
+					: header + '\n' + stack.split('\n').slice(1).join('\n')	// first line is bad, strip first line
+				: header + '\n' + stack.split('\n').map(line => line ? '    ' + line : line).join('\n');	// gross firefox/safari
+		};
+		const formatConsoleLog = value => {
+			if (value instanceof Error) return formatError(value);
+			return convToString(value);
+		};
+
+		// SAFARI IS THE BIGGEST GARBAGE IN THE WORLD
+		// if i dont catch the error and throw it myself
+		// safari thinks my code is not trusted and does not let me see error details
+		var isSafari = navigator.vendor && navigator.vendor.indexOf('Apple') > -1 &&
+                navigator.userAgent &&
+                navigator.userAgent.indexOf('CriOS') == -1 &&
+                navigator.userAgent.indexOf('FxiOS') == -1;
+  	    if (isSafari) {
+			const originalRequestAnimationFrame = window.requestAnimationFrame.bind(window);
+			window.requestAnimationFrame = callback => originalRequestAnimationFrame(time => {
+				try {
+					callback(time);
+				} catch (error) {
+					throw error;
+				}
+			});
+		}
+
+		// binds to console logs. this is where stuff like system.out.println() in processing ends up
+		for (const level of ['log', 'info', 'debug', 'warn', 'error']) {
+			const original = console[level].bind(console);
+			console[level] = (...values) => {
+				send({ type: 'log-raw', text: values.map(formatConsoleLog).join(' ') });
+				original(...values);
+			};
+		}
+
+		// now finally bind to error events
+		window.onerror = (message, source, line, column, error) => {
+			send({ type: 'log-raw', text: formatError(error) });
+		};
+		window.onunhandledrejection = event => {
+			send({ type: 'log-raw', text: formatError(event.reason) });
+		};
+
+		// handle messages from the host
+		window.addEventListener('message', event => {
+			if (event.data?.type === 'stop') {
+				stop();
+			} else if (event.data?.type === 'wasmBytes') {
+				resolveWasmBytes(new Uint8Array(event.data.bytes));
+			} else if (event.data?.type === 'file-response') {
+				const request = hostRequests.get(event.data.requestId);
+				if (request) {
+					hostRequests.delete(event.data.requestId);
+					if (event.data.error) {
+						const error = new Error(event.data.error);
+						error.name = event.data.errorName || 'Error';
+						request.reject(error);
+					} else {
+						request.resolve(event.data);
+					}
+				}
+			}
+		});
+
+		// set up other stuff, notify ready
+		window.addEventListener('resize', fitCanvas);
+		send({ type: 'readyForWasm' });
+
+		function stop() {
+			generation++;
+			clearRuntime();
+			status.textContent = 'Stopped.';
+			send({ type: 'stopped' });
+		}
+
+		function clearRuntime() {
+			try {
+				sketchInstance?.dispose?.();
+				sketchInstance?.destroy?.();
+				sketchInstance?.stop?.();
+				canvasBackend?.noLoop?.();
+			} catch (error) {
+				console.warn(error);
+			}
+			sketchInstance = undefined;
+			canvasBackend = undefined;
+			program = undefined;
+			canvasObserver?.disconnect();
+			canvasObserver = undefined;
+			sketch.replaceChildren();
+		}
+
+		function fitCanvas() {
+			const canvas = sketch.querySelector('canvas');
+			if (!canvas) {
+				return;
+			}
+			const sourceWidth = canvas.width || canvas.clientWidth;
+			const sourceHeight = canvas.height || canvas.clientHeight;
+			const targetWidth = sketch.clientWidth;
+			const targetHeight = sketch.clientHeight;
+			if (!sourceWidth || !sourceHeight || !targetWidth || !targetHeight) {
+				return;
+			}
+			const scale = Math.min(targetWidth / sourceWidth, targetHeight / sourceHeight);
+			canvas.style.width = Math.max(1, Math.floor(sourceWidth * scale)) + 'px';
+			canvas.style.height = Math.max(1, Math.floor(sourceHeight * scale)) + 'px';
+		}
+
+		// watch for canvas size changes too, not just the panel
+		function watchCanvasSize() {
+			canvasObserver?.disconnect();
+			canvasObserver = new MutationObserver(() => fitCanvas());
+			canvasObserver.observe(sketch, { childList: true, subtree: true, attributes: true, attributeFilter: ['width', 'height', 'style'] });
+			fitCanvas();
+			requestAnimationFrame(fitCanvas);
+		}
+
+		function requestHost(type, payload = {}) {
+			const requestId = nextHostRequestId++;
+			send({ ...payload, type, requestId });
+			return new Promise((resolve, reject) => hostRequests.set(requestId, { resolve, reject }));
+		}
+
+		function toBytes(value) {
+			return value instanceof Uint8Array ? value : new Uint8Array(value);
+		}
+
+		function isRelativeFetchInput(input) {
+			const value = typeof input === 'string'
+				? input
+				: input instanceof URL
+					? input.href
+					: input?.url;
+			return typeof value === 'string'
+				&& !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value)
+				&& !value.startsWith('//');
+		}
+
+		function fetchPath(input) {
+			const value = typeof input === 'string'
+				? input
+				: input instanceof URL
+					? input.href
+					: input.url;
+			return value.replace(/^\.\/+/, '').replace(/[?#].*$/, '');
+		}
+
+		function installRuntimeFetch() {
+			const originalFetch = globalThis.fetch.bind(globalThis);
+			globalThis.fetch = async (input, init) => {
+				if (!isRelativeFetchInput(input)) {
+					return originalFetch(input, init);
+				}
+				try {
+					const response = await requestHost('file-open', { path: fetchPath(input) });
+					return new Response(toOpenResult(response), { status: 200 });
+				} catch (error) {
+					if (error?.name === 'FileNotFoundError') {
+						return new Response('', { status: 404, statusText: 'Not Found' });
+					}
+					throw error;
+				}
+			};
+		}
+
+		function toOpenResult(response) {
+			return response.bytes == null ? response.bytes : toBytes(response.bytes);
+		}
+
+		function programOptions(runtimeModule) {
+			return {
+				runtimeModule,
+				stdio: {
+					stdin: '',
+					stdout: text => send({ type: 'stdout', text }),
+					stderr: text => send({ type: 'stderr', text })
+				},
+				fs: {
+					onFileWrite: (path, content) => send({ type: 'file-write', path, content }),
+					onFileClose: (path, mode, content) => send({ type: 'file-close', path, mode, content })
+				}
+			};
+		}
+
+		async function run() {
+			stop();
+			const current = ++generation;
+			status.textContent = 'Starting...';
+
+			// fetch files
+			const [runtimeModule, processingModule, wasmResponse] = await Promise.all([
+				import(payload.wasmRuntimeUri),
+				import(payload.processingUri),
+				payload.wasmUri ? fetch(payload.wasmUri) : Promise.resolve(undefined)
+			]);
+			if (current !== generation) return;
+			if (wasmResponse && !wasmResponse.ok) {
+				throw new Error('Failed to load compiled WebAssembly: HTTP ' + wasmResponse.status);
+			}
+			// host can set the wasm bytes directly. so we can load from that too.
+			const wasmBytes = wasmResponse ? new Uint8Array(await wasmResponse.arrayBuffer()) : await wasmBytesFromHost;
+			installRuntimeFetch();
+
+			// load program, create canvas backend and start sketch
+			program = await processingModule.createProcessingProgram(wasmBytes, programOptions(runtimeModule));
+			if (current !== generation) return;
+			canvasBackend = processingModule.createCanvas2DBackend(sketch, {});
+			sketchInstance = program.execute({ canvasBackend });
+			if (canvasBackend.canvas) {
+				watchCanvasSize();
+				status.textContent = 'Running...';
+				send({ type: 'started' });
+			}
+		}
+		run().catch(error => {	// this is for any error that occurs BEFORE processing actually runs
+			status.textContent = 'Starting failed.';
+			send({ type: 'log-raw', text: formatError(error) });
+			send({ type: 'stopped' });
+		});
+	</script>
+</body>
+</html>

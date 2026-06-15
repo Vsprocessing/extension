@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<style>
+		html, body {
+			height: 100%;
+			margin: 0;
+			padding: 0;
+			background: transparent;
+			color: var(--vscode-foreground);
+			font-family: var(--vscode-font-family);
+			font-size: var(--vscode-font-size);
+		}
+		.extensions-viewlet {
+			position: relative;
+			box-sizing: border-box;
+			height: 100%;
+			display: flex;
+			flex-direction: column;
+		}
+		.extensions-viewlet > .header {
+			height: 49px;
+			box-sizing: border-box;
+			padding: 5px 12px 14px 20px;
+		}
+		.extensions-search-container {
+			position: relative;
+		}
+		.suggest-input-container {
+			box-sizing: border-box;
+			width: 100%;
+			height: 28px;
+			border: 1px solid var(--vscode-input-border, transparent);
+			border-radius: 4px;
+			padding: 2px 6px;
+			background-color: var(--vscode-input-background);
+			color: var(--vscode-input-foreground);
+		}
+		.suggest-input-container:focus-within {
+			outline: 1px solid var(--vscode-focusBorder);
+			outline-offset: -1px;
+		}
+		.search-box {
+			box-sizing: border-box;
+			width: 100%;
+			height: 20px;
+			border: 0;
+			padding: 0;
+			background: none;
+			color: inherit;
+			font-family: var(--vscode-font-family);
+			font-size: 13px;
+			line-height: 20px;
+			outline: none;
+		}
+		.search-box::placeholder {
+			color: var(--vscode-input-placeholderForeground);
+			opacity: 1;
+		}
+		.status {
+			padding: 5px 9px 5px 20px;
+			color: var(--vscode-descriptionForeground);
+		}
+		.extensions {
+			position: relative;
+			overflow: auto;
+			height: 100%;
+			scrollbar-width: none;
+		}
+		.extensions::-webkit-scrollbar {
+			display: none;
+		}
+		.monaco-scrollable-element {
+			position: relative;
+			flex: 1;
+			overflow: hidden;
+		}
+		.monaco-scrollable-element > .visible {
+			opacity: 1;
+			background: rgba(0,0,0,0);
+			transition: opacity 100ms linear;
+			z-index: 11;
+		}
+		.monaco-scrollable-element > .invisible {
+			opacity: 0;
+			pointer-events: none;
+		}
+		.monaco-scrollable-element > .invisible.fade {
+			transition: opacity 800ms linear;
+		}
+		.monaco-scrollable-element > .scrollbar {
+			position: absolute;
+			background: var(--vscode-scrollbar-background);
+		}
+		.monaco-scrollable-element > .scrollbar.vertical {
+			top: 0;
+			right: 0;
+			width: 10px;
+			height: 100%;
+		}
+		.monaco-scrollable-element > .scrollbar > .slider {
+			position: absolute;
+			left: 0;
+			width: 10px;
+			background: var(--vscode-scrollbarSlider-background);
+			contain: strict;
+			will-change: transform;
+		}
+		.monaco-scrollable-element > .scrollbar > .slider:hover {
+			background: var(--vscode-scrollbarSlider-hoverBackground);
+		}
+		.monaco-scrollable-element > .scrollbar > .slider.active {
+			background: var(--vscode-scrollbarSlider-activeBackground);
+		}
+		.extension-list-item {
+			box-sizing: border-box;
+			width: 100%;
+			height: 72px;
+			display: flex;
+			border: 0;
+			padding: 8.5px 0 8.5px 20px;
+			background: transparent;
+			color: var(--vscode-foreground);
+			font: inherit;
+			text-align: left;
+			cursor: pointer;
+			overflow: hidden;
+		}
+		.extension-list-item:hover {
+			background: var(--vscode-list-hoverBackground);
+		}
+		.extension-list-item.selected {
+			background: var(--vscode-list-activeSelectionBackground);
+			color: var(--vscode-list-activeSelectionForeground);
+		}
+		.extension-list-item.selected .description {
+			color: unset;
+		}
+		.extension-list-item:focus-visible {
+			outline: 1px solid var(--vscode-focusBorder);
+			outline-offset: -1px;
+		}
+		.details {
+			box-sizing: border-box;
+			flex: 1;
+			min-width: 0;
+			display: flex;
+			flex-direction: column;
+			justify-content: flex-start;
+			overflow: hidden;
+		}
+		.header-container {
+			height: 19px;
+			display: flex;
+			overflow: hidden;
+			padding-right: 11px;
+		}
+		.item-header {
+			display: flex;
+			align-items: center;
+			flex-wrap: nowrap;
+			overflow: hidden;
+			flex: 1;
+			min-width: 0;
+		}
+		.name {
+			font-weight: bold;
+			white-space: nowrap;
+			text-overflow: ellipsis;
+			overflow: hidden;
+			min-width: 0;
+		}
+		.description {
+			display: -webkit-box;
+			padding-right: 11px;
+			overflow: hidden;
+			color: var(--vscode-descriptionForeground);
+			line-height: 18px;
+			height: 36px;
+			-webkit-box-orient: vertical;
+			-webkit-line-clamp: 2;
+		}
+	</style>
+</head>
+<body>
+	<div class="extensions-viewlet">
+		<div class="header">
+			<div class="extensions-search-container">
+				<div class="suggest-input-container">
+					<input id="search" class="search-box" type="text" placeholder="Search Assignments" aria-label="Search Assignments" spellcheck="false" autocapitalize="off" autocorrect="off">
+				</div>
+			</div>
+		</div>
+		<div id="status" class="status"></div>
+		<div id="scrollable" class="monaco-scrollable-element">
+			<div id="list" class="extensions"></div>
+			<div id="scrollbar" class="invisible scrollbar vertical">
+				<div id="slider" class="slider"></div>
+			</div>
+		</div>
+	</div>
+	<script nonce="{{nonce}}">
+		const vscode = acquireVsCodeApi();
+		const state = JSON.parse("{{initialState}}");
+		const search = document.getElementById('search');
+		const status = document.getElementById('status');
+		const list = document.getElementById('list');
+		const scrollable = document.getElementById('scrollable');
+		const scrollbar = document.getElementById('scrollbar');
+		const slider = document.getElementById('slider');
+		let hideScrollbarHandle = 0;
+		let dragging = false;
+		let dragStartY = 0;
+		let dragStartScrollTop = 0;
+		let selectedAssignmentId = '';
+
+		function showScrollbar() {
+			if (!scrollbar || !list || list.scrollHeight <= list.clientHeight) {
+				return;
+			}
+			scrollbar.className = 'visible scrollbar vertical';
+			clearTimeout(hideScrollbarHandle);
+			hideScrollbarHandle = setTimeout(() => {
+				if (!dragging && scrollbar) {
+					scrollbar.className = 'invisible fade scrollbar vertical';
+				}
+			}, 700);
+		}
+
+		function updateScrollbar() {
+			if (!scrollbar || !slider || !list) {
+				return;
+			}
+			const visibleSize = list.clientHeight;
+			const scrollSize = list.scrollHeight;
+			if (scrollSize <= visibleSize || visibleSize <= 0) {
+				scrollbar.className = 'invisible scrollbar vertical';
+				return;
+			}
+			const trackSize = scrollbar.clientHeight;
+			const sliderSize = Math.max(20, Math.floor(trackSize * visibleSize / scrollSize));
+			const maxSliderTop = trackSize - sliderSize;
+			const maxScrollTop = scrollSize - visibleSize;
+			const sliderTop = maxScrollTop > 0 ? Math.round(maxSliderTop * list.scrollTop / maxScrollTop) : 0;
+			slider.style.height = sliderSize + 'px';
+			slider.style.transform = 'translateY(' + sliderTop + 'px)';
+			showScrollbar();
+		}
+
+		function matchesKeyword(text, keyword) {
+			const source = text.toLowerCase();
+			let index = source.indexOf(keyword);
+			while (index >= 0) {
+				const before = index === 0 ? '' : source[index - 1];
+				const startsAtBoundary = !before || !/[a-z0-9]/.test(before);
+				if (startsAtBoundary) {
+					return true;
+				}
+				index = source.indexOf(keyword, index + 1);
+			}
+			return false;
+		}
+
+		function matches(assignment, query) {
+			const keywords = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+			if (!keywords.length) {
+				return true;
+			}
+			return keywords.every(keyword => matchesKeyword(assignment.name, keyword));
+		}
+
+		function render() {
+			list.textContent = '';
+			const query = search.value || '';
+			const assignments = (state.assignments || []).filter(assignment => matches(assignment, query));
+			if (state.loading) {
+				status.textContent = 'Loading assignments...';
+				status.hidden = false;
+				updateScrollbar();
+				return;
+			}
+			if (state.error) {
+				status.textContent = 'Failed to load assignments.';
+				status.hidden = false;
+				updateScrollbar();
+				return;
+			}
+			if (!assignments.length) {
+				status.textContent = query ? 'No assignments match your search.' : 'No assignments available.';
+				status.hidden = false;
+				updateScrollbar();
+				return;
+			}
+			status.textContent = '';
+			status.hidden = true;
+			for (const assignment of assignments) {
+				const item = document.createElement('button');
+				item.className = 'extension-list-item';
+				if (assignment.id === selectedAssignmentId) {
+					item.classList.add('selected');
+				}
+				item.type = 'button';
+				item.dataset.assignmentId = assignment.id;
+
+				const details = document.createElement('div');
+				details.className = 'details';
+				const headerContainer = document.createElement('div');
+				headerContainer.className = 'header-container';
+				const header = document.createElement('div');
+				header.className = 'item-header';
+				const name = document.createElement('div');
+				name.className = 'name';
+				name.textContent = assignment.name;
+				header.append(name);
+				headerContainer.append(header);
+
+				const description = document.createElement('div');
+				description.className = 'description';
+				description.textContent = assignment.descriptionPreview;
+
+				details.append(headerContainer, description);
+				item.append(details);
+				list.append(item);
+			}
+			updateScrollbar();
+		}
+
+		search.addEventListener('input', () => {
+			render();
+			list.scrollTop = 0;
+			updateScrollbar();
+		});
+		list.addEventListener('scroll', updateScrollbar);
+		scrollable.addEventListener('mouseenter', showScrollbar);
+		scrollable.addEventListener('mouseleave', () => {
+			if (!dragging && scrollbar) {
+				scrollbar.className = 'invisible fade scrollbar vertical';
+			}
+		});
+		if (typeof ResizeObserver !== 'undefined') {
+			new ResizeObserver(updateScrollbar).observe(scrollable);
+			new ResizeObserver(updateScrollbar).observe(list);
+		}
+		slider.addEventListener('pointerdown', event => {
+			dragging = true;
+			dragStartY = event.clientY;
+			dragStartScrollTop = list.scrollTop;
+			slider.classList.add('active');
+			scrollbar.className = 'visible scrollbar vertical';
+			slider.setPointerCapture(event.pointerId);
+			event.preventDefault();
+		});
+		slider.addEventListener('pointermove', event => {
+			if (!dragging) {
+				return;
+			}
+			const trackSize = scrollbar.clientHeight;
+			const sliderSize = slider.offsetHeight;
+			const maxSliderTop = trackSize - sliderSize;
+			const maxScrollTop = list.scrollHeight - list.clientHeight;
+			if (maxSliderTop > 0 && maxScrollTop > 0) {
+				const delta = event.clientY - dragStartY;
+				list.scrollTop = dragStartScrollTop + delta * maxScrollTop / maxSliderTop;
+			}
+			event.preventDefault();
+		});
+		slider.addEventListener('pointerup', event => {
+			dragging = false;
+			slider.classList.remove('active');
+			slider.releasePointerCapture(event.pointerId);
+			updateScrollbar();
+		});
+		slider.addEventListener('pointercancel', event => {
+			dragging = false;
+			slider.classList.remove('active');
+			slider.releasePointerCapture(event.pointerId);
+			updateScrollbar();
+		});
+		scrollbar.addEventListener('pointerdown', event => {
+			if (event.target !== scrollbar) {
+				return;
+			}
+			const rect = scrollbar.getBoundingClientRect();
+			const sliderTop = slider.getBoundingClientRect().top - rect.top;
+			const page = list.clientHeight;
+			list.scrollTop += event.clientY - rect.top < sliderTop ? -page : page;
+			updateScrollbar();
+			event.preventDefault();
+		});
+		list.addEventListener('click', event => {
+			const item = event.target instanceof Element ? event.target.closest('[data-assignment-id]') : undefined;
+			if (item) {
+				selectedAssignmentId = item.dataset.assignmentId || '';
+				for (const row of list.querySelectorAll('.extension-list-item.selected')) {
+					row.classList.remove('selected');
+				}
+				item.classList.add('selected');
+				vscode.postMessage({ type: 'openAssignment', id: item.dataset.assignmentId });
+			}
+		});
+		window.addEventListener('message', event => {
+			if (event.data?.type === 'state') {
+				Object.assign(state, event.data.state);
+				render();
+			}
+		});
+		render();
+		updateScrollbar();
+	</script>
+</body>
+</html>
