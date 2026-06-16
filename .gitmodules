@@ -5,3 +5,7 @@
 [submodule "eclipse.jdt.ls-web"]
 	path = submodules/eclipse.jdt.ls-web
 	url = https://github.com/Vsprocessing/eclipse.jdt.ls-web
+
+[submodule "cspt-dists"]
+	path = submodules/cspt-dists
+	url = https://github.com/Vsprocessing/cspt-dists

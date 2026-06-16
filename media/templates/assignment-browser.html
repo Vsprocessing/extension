@@ -214,7 +214,7 @@
 		let dragging = false;
 		let dragStartY = 0;
 		let dragStartScrollTop = 0;
-		let selectedAssignmentId = '';
+		let selectedAssignmentKey = '';
 
 		function showScrollbar() {
 			if (!scrollbar || !list || list.scrollHeight <= list.clientHeight) {
@@ -298,11 +298,11 @@
 			for (const assignment of assignments) {
 				const item = document.createElement('button');
 				item.className = 'extension-list-item';
-				if (assignment.id === selectedAssignmentId) {
+				if (assignment.catalogKey === selectedAssignmentKey) {
 					item.classList.add('selected');
 				}
 				item.type = 'button';
-				item.dataset.assignmentId = assignment.id;
+				item.dataset.assignmentKey = assignment.catalogKey;
 
 				const details = document.createElement('div');
 				details.className = 'details';
@@ -390,14 +390,14 @@
 			event.preventDefault();
 		});
 		list.addEventListener('click', event => {
-			const item = event.target instanceof Element ? event.target.closest('[data-assignment-id]') : undefined;
+			const item = event.target instanceof Element ? event.target.closest('[data-assignment-key]') : undefined;
 			if (item) {
-				selectedAssignmentId = item.dataset.assignmentId || '';
+				selectedAssignmentKey = item.dataset.assignmentKey || '';
 				for (const row of list.querySelectorAll('.extension-list-item.selected')) {
 					row.classList.remove('selected');
 				}
 				item.classList.add('selected');
-				vscode.postMessage({ type: 'openAssignment', id: item.dataset.assignmentId });
+				vscode.postMessage({ type: 'openAssignment', id: item.dataset.assignmentKey });
 			}
 		});
 		window.addEventListener('message', event => {

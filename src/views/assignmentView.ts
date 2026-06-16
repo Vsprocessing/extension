@@ -132,7 +132,7 @@ export class AssignmentViewProvider implements vscode.CustomReadonlyEditorProvid
 			description: assignment.description,
 			started: active,
 			preview,
-			hasWorkspace: !!workspaceFolder,
+			hasWorkspace: true,
 			running,
 			results: assignment.checks.map(check => {
 				const result = results.get(check.id);
@@ -146,7 +146,7 @@ export class AssignmentViewProvider implements vscode.CustomReadonlyEditorProvid
 				};
 			}),
 			message: !workspaceFolder
-				? 'Open a workspace folder before downloading or starting an assignment.'
+				? 'This will create a workspace folder in VS Code storage.'
 				: active
 					? ''
 					: preview

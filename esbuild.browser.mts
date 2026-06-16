@@ -23,9 +23,20 @@ const options: esbuild.BuildOptions = {
 		'path': 'path-browserify',
 	},
 	define: {
+		'import.meta.url': '__webprocessingImportMetaUrl',
 		'process.platform': JSON.stringify('web'),
 		'process.env': JSON.stringify({}),
 		'process.env.BROWSER_ENV': JSON.stringify('true'),
+	},
+	banner: {
+		js: `var __webprocessingImportMetaUrl = (() => {
+	try {
+		throw new Error();
+	} catch (error) {
+		const match = String(error?.stack ?? '').match(/https?:\\/\\/\\S+\\/dist\\/browser\\/extension\\.js/);
+		return match?.[0] ?? globalThis.location?.href ?? 'http://localhost/';
+	}
+})();`
 	},
 	logOverride: {
 		'import-is-undefined': 'error',
@@ -63,4 +74,8 @@ async function afterBuild(): Promise<void> {
 	await copyFile(path.join(pdfjsBuildDir, 'pdf.worker.mjs.map'), path.join(pdfjsBuildOutDir, 'pdf.worker.mjs.map'));
 	await copyFile(path.join(pdfjsBuildDir, 'pdf.sandbox.mjs'), path.join(pdfjsBuildOutDir, 'pdf.sandbox.mjs'));
 	await copyFile(path.join(pdfjsBuildDir, 'pdf.sandbox.mjs.map'), path.join(pdfjsBuildOutDir, 'pdf.sandbox.mjs.map'));
+	await copyFile(
+		path.join(import.meta.dirname, 'node_modules', 'cspt-unpacker', 'cspt-core.wasm'),
+		path.join(outDir, 'cspt-core.wasm')
+	);
 }

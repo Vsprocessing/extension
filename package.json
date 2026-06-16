@@ -1,9 +1,9 @@
 {
-  "name": "webprocessing",
+  "name": "extension",
   "displayName": "%displayName%",
   "description": "%description%",
   "version": "10.0.0",
-  "publisher": "CloudTronUSA",
+  "publisher": "visualprocessing",
   "license": "MIT",
   "engines": {
     "vscode": "^1.100.0"
@@ -82,6 +82,18 @@
           "markdownDescription": "%configuration.processingOutput.markdownDescription%",
           "scope": "resource",
           "order": 10
+        },
+        "webprocessing.assignmentStoreUrls": {
+          "type": "array",
+          "default": [
+            "https://vsp-cspt-store.cloudtron.us/"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "%configuration.assignmentStoreUrls.markdownDescription%",
+          "scope": "application",
+          "order": 20
         }
       }
     },
@@ -235,6 +247,9 @@
     "@noble/ciphers": "^2.2.0",
     "@noble/hashes": "^2.2.0",
     "@types/node": "^25.9.2",
+    "@worldeditaxe/teavm-javac": "file:submodules/teavm-javac/dist/teavm-javac",
+    "cspt-unpacker": "file:submodules/cspt-dists",
+    "eclipse-jdt-ls-web": "file:submodules/eclipse.jdt.ls-web/org.eclipse.jdt.ls.web/src/main/web",
     "pdfjs-dist": "^6.0.227"
   },
   "devDependencies": {

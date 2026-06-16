@@ -15,5 +15,6 @@
   "command.openReferenceSheet": "Open Reference Sheet...",
   "command.refreshAssignments": "Refresh",
   "configuration.title": "Web Processing",
-  "configuration.processingOutput.markdownDescription": "Before your code can run in a browser, we have to translate your Java code into something that the browser can understand. WASM-GC translates your Java code to code that runs very fast, but can only be understood by the newest browsers. JS (JavaScript) runs in all browsers, but can be slower than WASM-GC.\n\nLeave this set to 'auto' if you don't know what you are doing!"
+  "configuration.processingOutput.markdownDescription": "Before your code can run in a browser, we have to translate your Java code into something that the browser can understand. WASM-GC translates your Java code to code that runs very fast, but can only be understood by the newest browsers. JS (JavaScript) runs in all browsers, but can be slower than WASM-GC.\n\nLeave this set to 'auto' if you don't know what you are doing!",
+  "configuration.assignmentStoreUrls.markdownDescription": "Base URLs for CSPT assignment stores. The extension loads `catalog.json` from each URL and assignment bundles as `<assignment id>.cspt` from the same store."
 }

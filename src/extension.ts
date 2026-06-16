@@ -1,13 +1,17 @@
 import * as vscode from 'vscode';
+import * as javaCompilerPackage from '@worldeditaxe/teavm-javac';
+import * as processingCompilerPackage from '@worldeditaxe/teavm-javac/processing';
+import type { CreateCompilerOptions } from '@worldeditaxe/teavm-javac';
 import { assignmentPath, loadCsptUnpacker, readAssignmentData, writeAssignmentData } from './assignment/assignmentLoader';
 import type { CompileCheck, CsptAssignment, CsptCheckResult, ValidatorCheck } from './assignment/types';
 import { ProcessingLinter } from './java-lsp/processingLsp';
+import { teavmPackageUri } from './compiler/teavmPackage';
 import { AssignmentViewProvider } from './views/assignmentView';
 import {
 	buildArtifactFileName, buildArtifactFileUri, collectSources, countLines,
 	createNonce, escapeScriptJson, formatDiagnostic, formatDuration,
 	getWorkspaceFolder, hasSources, identifyEntrypoint, isBuildArtifactOutdated,
-	isTempBuildArtifactOutdated, readTemplate,
+	isInWorkspaceFolder, isTempBuildArtifactOutdated, readTemplate,
 	renderTemplate, sourceVersions, statOrUndefined, stripExtension, stripWasmExtension,
 	toJavaIdentifier, type SourceKind, type WorkspaceSource
 } from './utils';
@@ -25,11 +29,10 @@ const runtimeViewType = 'webruntime';
 const referenceViewType = 'webprocessing.reference';
 const assignmentBrowserViewType = 'webprocessing.assignments';
 const defaultOpenStateKey = 'webprocessing.defaultOpen.v1';
-const assignmentCatalogUrl = 'https://vsp-cspt-store.cloudtron.us/catalog.json';
-const assignmentStoreBaseUrl = 'https://vsp-cspt-store.cloudtron.us/';
+const defaultAssignmentStoreUrls = ['https://vsp-cspt-store.cloudtron.us/'];
 
-type ProcessingModule = typeof import('../lib/teavm-javac/processing-teavm.js');
-type CompilerModule = typeof import('../lib/teavm-javac/teavm-javac.js');
+type ProcessingModule = typeof processingCompilerPackage;
+type CompilerModule = typeof javaCompilerPackage;
 
 interface BuildArtifact {
 	readonly mode: SourceKind;
@@ -56,12 +59,19 @@ interface ExtensionControlsViewState extends ExtensionState {
 }
 
 interface AssignmentCatalogItem {
+	readonly catalogKey: string;
+	readonly storeUrl: string;
 	readonly id: string;
 	readonly name: string;
 	readonly descriptionPreview: string;
 }
 
-const importModule = new Function('specifier', 'return import(specifier);') as <T>(specifier: string) => Promise<T>;
+type AssignmentCatalogEntry = Omit<AssignmentCatalogItem, 'catalogKey' | 'storeUrl'>;
+
+interface AssignmentTarget {
+	readonly uri: vscode.Uri;
+	readonly name: string;
+}
 
 export function activate(context: vscode.ExtensionContext): void {
 	const extension = new Extension(context);
@@ -159,8 +169,6 @@ class Extension implements vscode.Disposable {
 	private javaRuntimeRunId = 0;
 	private javaRuntimeRoot: vscode.Uri | undefined;
 	private mode: SourceKind = 'processing';
-	private processingCompilerModule: Promise<ProcessingModule> | undefined;
-	private javaCompilerModule: Promise<CompilerModule> | undefined;
 	private assignments: readonly AssignmentCatalogItem[] = [];
 	private assignmentsLoading = false;
 	private assignmentsError = '';
@@ -309,21 +317,19 @@ class Extension implements vscode.Disposable {
 	}
 
 	async downloadAssignment(assignment: CsptAssignment, bytes: Uint8Array): Promise<vscode.Uri | undefined> {
-		const workspaceFolder = getWorkspaceFolder();
-		if (!workspaceFolder) {
-			void vscode.window.showWarningMessage(vscode.l10n.t('Open a workspace folder before downloading an assignment.'));
+		const target = await this.assignmentTarget(assignment);
+		if (!target) {
 			return undefined;
 		}
 		const fileName = `${assignment.id.replace(/[^a-zA-Z0-9._-]/g, '-')}.cspt`;
-		const uri = vscode.Uri.joinPath(workspaceFolder.uri, fileName);
+		const uri = vscode.Uri.joinPath(target.uri, fileName);
 		await vscode.workspace.fs.writeFile(uri, bytes);
 		return uri;
 	}
 
 	private async writeAssignmentFiles(assignment: CsptAssignment): Promise<boolean> {
-		const workspaceFolder = getWorkspaceFolder();
-		if (!workspaceFolder) {
-			void vscode.window.showWarningMessage(vscode.l10n.t('Open a workspace folder before starting an assignment.'));
+		const target = await this.assignmentTarget(assignment);
+		if (!target) {
 			return false;
 		}
 
@@ -333,10 +339,10 @@ class Extension implements vscode.Disposable {
 		this.showOutput();
 		this.log(`[assignment] Starting ${assignment.id}`);
 		for (const file of templateFiles) {
-			await this.writeAssignmentTemplate(workspaceFolder, file.path, file.bytes);
+			await this.writeAssignmentTemplate(target, file.path, file.bytes);
 			this.log(`[assignment] Wrote ${file.path}`);
 		}
-		await writeAssignmentData(workspaceFolder, {
+		await writeAssignmentData(target, {
 			id: assignment.id,
 			displayName: assignment.displayName,
 			bundleUri: assignment.uri.toString(),
@@ -345,23 +351,79 @@ class Extension implements vscode.Disposable {
 		this.mode = 'java';
 		await this.refreshState();
 		if (readme) {
-			await vscode.commands.executeCommand('markdown.showPreview', assignmentPath(workspaceFolder, readme.path));
+			await vscode.commands.executeCommand('markdown.showPreview', assignmentPath(target, readme.path));
 		}
 		return true;
 	}
 
-	async openCatalogAssignment(id: string): Promise<void> {
-		const safeId = this.assignments.find(item => item.id === id)?.id;
-		if (!safeId) {
+	private async assignmentTarget(assignment: CsptAssignment): Promise<AssignmentTarget | undefined> {
+		const workspaceFolder = getWorkspaceFolder();
+		if (workspaceFolder) {
+			return workspaceFolder;
+		}
+
+		const name = this.assignmentWorkspaceName(assignment);
+		const uri = vscode.Uri.joinPath(this.context.globalStorageUri, 'assignment-workspaces', this.assignmentStorageFolderName(assignment));
+		await vscode.workspace.fs.createDirectory(uri);
+
+		const existing = this.findWorkspaceFolder(uri);
+		if (existing) {
+			return existing;
+		}
+
+		const added = vscode.workspace.updateWorkspaceFolders(vscode.workspace.workspaceFolders?.length ?? 0, 0, { uri, name });
+		if (!added) {
+			void vscode.window.showWarningMessage(vscode.l10n.t('Could not create a workspace folder for this assignment.'));
+			return undefined;
+		}
+
+		return await this.waitForWorkspaceFolder(uri) ?? { uri, name };
+	}
+
+	private assignmentWorkspaceName(assignment: CsptAssignment): string {
+		return assignment.displayName.trim() || assignment.id || 'Assignment';
+	}
+
+	private assignmentStorageFolderName(assignment: CsptAssignment): string {
+		return assignment.id.replace(/[^a-zA-Z0-9._-]/g, '-') || 'assignment';
+	}
+
+	private findWorkspaceFolder(uri: vscode.Uri): vscode.WorkspaceFolder | undefined {
+		return vscode.workspace.workspaceFolders?.find(folder => folder.uri.toString() === uri.toString());
+	}
+
+	private async waitForWorkspaceFolder(uri: vscode.Uri): Promise<vscode.WorkspaceFolder | undefined> {
+		const existing = this.findWorkspaceFolder(uri);
+		if (existing) {
+			return existing;
+		}
+		return new Promise(resolve => {
+			const disposable = vscode.workspace.onDidChangeWorkspaceFolders(() => {
+				const folder = this.findWorkspaceFolder(uri);
+				if (folder) {
+					disposable.dispose();
+					resolve(folder);
+				}
+			});
+			setTimeout(() => {
+				disposable.dispose();
+				resolve(this.findWorkspaceFolder(uri));
+			}, 1000);
+		});
+	}
+
+	async openCatalogAssignment(key: string): Promise<void> {
+		const assignment = this.assignments.find(item => item.catalogKey === key);
+		if (!assignment) {
 			return;
 		}
 		try {
-			const response = await fetch(`${assignmentStoreBaseUrl}${encodeURIComponent(safeId)}.cspt`);
+			const response = await fetch(this.assignmentStoreUrl(assignment.storeUrl, `${encodeURIComponent(assignment.id)}.cspt`));
 			if (!response.ok) {
 				throw new Error(`HTTP ${response.status}`);
 			}
 			const bytes = new Uint8Array(await response.arrayBuffer());
-			await this.assignmentViewProvider.openPreview(safeId, bytes);
+			await this.assignmentViewProvider.openPreview(assignment.id, bytes);
 		} catch (error) {
 			void vscode.window.showErrorMessage(vscode.l10n.t('Failed to open assignment: {0}', String(error)));
 		}
@@ -385,16 +447,20 @@ class Extension implements vscode.Disposable {
 		this.controlsProvider.update();
 		this.assignmentBrowserProvider.update();
 		try {
-			const response = await fetch(assignmentCatalogUrl);
-			if (!response.ok) {
-				throw new Error(`HTTP ${response.status}`);
+			const stores = this.assignmentStoreUrls();
+			const assignments: AssignmentCatalogItem[] = [];
+			const errors: string[] = [];
+			for (const [index, storeUrl] of stores.entries()) {
+				try {
+					assignments.push(...await this.loadAssignmentCatalogFromStore(storeUrl, index));
+				} catch (error) {
+					errors.push(`${storeUrl}: ${String(error)}`);
+				}
 			}
-			const catalog = await response.json() as AssignmentCatalogItem[];
-			this.assignments = catalog.filter(item =>
-				typeof item.id === 'string'
-				&& typeof item.name === 'string'
-				&& typeof item.descriptionPreview === 'string'
-			);
+			if (!assignments.length && errors.length) {
+				throw new Error(errors.join('\n'));
+			}
+			this.assignments = assignments;
 		} catch (error) {
 			this.assignmentsError = String(error);
 		} finally {
@@ -402,6 +468,35 @@ class Extension implements vscode.Disposable {
 			this.controlsProvider.update();
 			this.assignmentBrowserProvider.update();
 		}
+	}
+
+	private async loadAssignmentCatalogFromStore(storeUrl: string, storeIndex: number): Promise<AssignmentCatalogItem[]> {
+		const response = await fetch(this.assignmentStoreUrl(storeUrl, 'catalog.json'));
+		if (!response.ok) {
+			throw new Error(`HTTP ${response.status}`);
+		}
+		const catalog = await response.json() as AssignmentCatalogEntry[];
+		return catalog
+			.filter(item =>
+				typeof item.id === 'string'
+				&& typeof item.name === 'string'
+				&& typeof item.descriptionPreview === 'string'
+			)
+			.map(item => ({
+				...item,
+				storeUrl,
+				catalogKey: `${storeIndex}:${item.id}`
+			}));
+	}
+
+	private assignmentStoreUrls(): string[] {
+		const configured = vscode.workspace.getConfiguration('webprocessing').get<readonly string[]>('assignmentStoreUrls') ?? [];
+		const urls = configured.map(url => url.trim()).filter(Boolean);
+		return urls.length ? urls : defaultAssignmentStoreUrls;
+	}
+
+	private assignmentStoreUrl(baseUrl: string, path: string): string {
+		return new URL(path, baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).toString();
 	}
 
 	async evaluateAssignment(assignment: CsptAssignment): Promise<void> {
@@ -479,7 +574,7 @@ class Extension implements vscode.Disposable {
 
 	private async collectAssignmentSources(workspaceFolder: vscode.WorkspaceFolder): Promise<readonly WorkspaceSource[]> {
 		const collection = await collectSources('java');
-		const sources = collection.sources.filter(source => source.uri.scheme !== 'file' || source.uri.path.startsWith(workspaceFolder.uri.path));
+		const sources = collection.sources.filter(source => isInWorkspaceFolder(source.uri, workspaceFolder));
 		if (!sources.length) {
 			throw new Error('No Java source files were found.');
 		}
@@ -511,14 +606,13 @@ class Extension implements vscode.Disposable {
 
 	private async runJavaProgram(wasmBytes: Uint8Array, args: readonly string[], timeoutMs: number | undefined, quiet = false): Promise<{ stdout: string; stderr: string; error?: string }> {
 		const module = await this.loadJavaCompilerModule();
-		const runtimeModule = await importModule<{ load(wasmBytes: Uint8Array, options?: Record<string, unknown>): Promise<unknown> }>(this.assetImportUri('compiler.wasm-runtime.js'));
 		let stdout = '';
 		let stderr = '';
 		const hasExceptionMessage = hasWasmExport(wasmBytes, 'teavm.exceptionMessage');
 		const hasStringToJs = hasWasmExport(wasmBytes, 'teavm.stringToJs');
 		try {
 			const program = await module.createJavaProgram(wasmBytes, {
-				runtimeModule,
+				wasmRuntimeUrl: this.assetImportUri('compiler.wasm-runtime.js'),
 				stdio: {
 					stdin: '',
 					stdout: text => { stdout += text; },
@@ -549,10 +643,10 @@ class Extension implements vscode.Disposable {
 		}
 	}
 
-	private async writeAssignmentTemplate(workspaceFolder: vscode.WorkspaceFolder, path: string, bytes: Uint8Array): Promise<void> {
-		const uri = assignmentPath(workspaceFolder, path);
+	private async writeAssignmentTemplate(target: AssignmentTarget, path: string, bytes: Uint8Array): Promise<void> {
+		const uri = assignmentPath(target, path);
 		const folder = parentUri(uri);
-		if (folder.toString() !== workspaceFolder.uri.toString()) {
+		if (folder.toString() !== target.uri.toString()) {
 			await vscode.workspace.fs.createDirectory(folder);
 		}
 		await vscode.workspace.fs.writeFile(uri, bytes);
@@ -857,7 +951,7 @@ class Extension implements vscode.Disposable {
 	}
 
 	async openApcsaReference(): Promise<void> {
-		await this.openReferencePanel('APCSA Reference', vscode.Uri.joinPath(this.context.extensionUri, 'media', 'reference', 'ap-computer-science-a-java-quick-reference.html'));
+		await this.openReferencePanel('APCSA Reference', vscode.Uri.joinPath(this.context.extensionUri, 'media', 'reference', 'ap-computer-science-a-java-quick-reference.pdf'));
 	}
 
 	private async openReferencePanel(title: string, source: string | vscode.Uri): Promise<void> {
@@ -988,24 +1082,18 @@ class Extension implements vscode.Disposable {
 	}
 
 	private async loadProcessingCompilerModule(): Promise<ProcessingModule> {
-		if (!this.processingCompilerModule) {
-			this.processingCompilerModule = importModule<ProcessingModule>(this.assetImportUri('processing-teavm.js'));
-		}
-		return this.processingCompilerModule;
+		return processingCompilerPackage;
 	}
 
 	private async loadJavaCompilerModule(): Promise<CompilerModule> {
-		if (!this.javaCompilerModule) {
-			this.javaCompilerModule = importModule<CompilerModule>(this.assetImportUri('teavm-javac.js'));
-		}
-		return this.javaCompilerModule;
+		return javaCompilerPackage;
 	}
 
 	private async readAsset(name: string): Promise<Uint8Array> {
 		return vscode.workspace.fs.readFile(this.assetUri(name));
 	}
 
-	private compilerOptions(): import('../lib/teavm-javac/teavm-javac.js').CreateCompilerOptions {
+	private compilerOptions(): CreateCompilerOptions {
 		return {
 			compilerWasmUrl: this.assetUri('compiler.wasm').toString(),
 			compilerWasmRuntimeUrl: this.assetImportUri('compiler.wasm-runtime.js'),
@@ -1016,7 +1104,7 @@ class Extension implements vscode.Disposable {
 	}
 
 	private assetUri(name: string): vscode.Uri {
-		return vscode.Uri.joinPath(this.context.extensionUri, 'lib', 'teavm-javac', name);
+		return teavmPackageUri(this.context.extensionUri, name);
 	}
 
 	private assetImportUri(name: string): string {
@@ -1187,8 +1275,8 @@ class ProcessingRuntimePanel implements vscode.Disposable {
 			enableScripts: true,
 			retainContextWhenHidden: true,
 			localResourceRoots: localRoot
-				? [vscode.Uri.joinPath(extensionUri, 'lib', 'teavm-javac'), localRoot]
-				: [vscode.Uri.joinPath(extensionUri, 'lib', 'teavm-javac')]
+				? [vscode.Uri.joinPath(teavmPackageUri(extensionUri, 'package.json'), '..'), localRoot]
+				: [vscode.Uri.joinPath(teavmPackageUri(extensionUri, 'package.json'), '..')]
 		});
 		this.panel.webview.onDidReceiveMessage(message => {
 			if (message?.runId !== undefined && message.runId !== this.runId) {
@@ -1268,8 +1356,8 @@ class ProcessingRuntimePanel implements vscode.Disposable {
 		const payload = escapeScriptJson(JSON.stringify({
 			runId,
 			wasmUri: wasmUri ? this.panel.webview.asWebviewUri(wasmUri).toString() : '',
-			wasmRuntimeUri: this.panel.webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'lib', 'teavm-javac', 'compiler.wasm-runtime.js')).toString(),
-			processingUri: this.panel.webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'lib', 'teavm-javac', 'processing-teavm.js')).toString()
+			wasmRuntimeUri: this.panel.webview.asWebviewUri(teavmPackageUri(this.extensionUri, 'compiler.wasm-runtime.js')).toString(),
+			processingUri: this.panel.webview.asWebviewUri(teavmPackageUri(this.extensionUri, 'processing')).toString()
 		}));
 		return renderTemplate(await readTemplate(this.extensionUri, 'processing-runtime.html'), {
 			nonce,
@@ -1325,9 +1413,13 @@ class ProcessingReferencePanel implements vscode.Disposable {
 
 	private async getHtml(title: string, source: string | vscode.Uri): Promise<string> {
 		const nonce = createNonce();
+		const url = typeof source === 'string' ? source : this.panel.webview.asWebviewUri(source).toString();
+		const isPdf = typeof source !== 'string' && source.path.toLowerCase().endsWith('.pdf');
 		const payload = escapeScriptJson(JSON.stringify({
 			title,
-			url: typeof source === 'string' ? source : this.panel.webview.asWebviewUri(source).toString()
+			url,
+			kind: isPdf ? 'pdf' : 'web',
+			pdfViewerPageUri: this.panel.webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'pdfjs', 'web', 'viewer.html')).toString()
 		}));
 		return renderTemplate(await readTemplate(this.extensionUri, 'processing-reference.html'), {
 			nonce,

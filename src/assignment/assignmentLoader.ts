@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { Unpacker } from 'cspt-unpacker';
 import type { AssignmentCheck, CsptAssignment, CsptAssignmentData } from './types';
 import { exists } from '../utils';
 
@@ -13,7 +14,10 @@ declare const TextEncoder: {
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 export const assignmentDataFileName = '.cspt.dat';
-const importModule = new Function('specifier', 'return import(specifier);') as <T>(specifier: string) => Promise<T>;
+
+export interface AssignmentRoot {
+	readonly uri: vscode.Uri;
+}
 
 interface CsptUnpacker {
 	id(): Promise<string>;
@@ -21,10 +25,6 @@ interface CsptUnpacker {
 	description(): Promise<string>;
 	checks(includeHidden?: boolean): Promise<AssignmentCheck[]>;
 	templateFiles(): Promise<readonly { readonly path: string; readonly bytes: Uint8Array }[]>;
-}
-
-interface CsptUnpackerModule {
-	readonly Unpacker: new (bundleBytes: Uint8Array) => CsptUnpacker;
 }
 
 export async function loadCsptAssignment(extensionUri: vscode.Uri, uri: vscode.Uri): Promise<CsptAssignment> {
@@ -51,30 +51,29 @@ export async function loadCsptUnpacker(extensionUri: vscode.Uri, uri: vscode.Uri
 	return loadCsptUnpackerFromBytes(extensionUri, await vscode.workspace.fs.readFile(uri));
 }
 
-export async function loadCsptUnpackerFromBytes(extensionUri: vscode.Uri, bytes: Uint8Array): Promise<CsptUnpacker> {
-	const module = await importModule<CsptUnpackerModule>(vscode.Uri.joinPath(extensionUri, 'lib', 'cspt-unpacker', 'index.js').toString());
-	return new module.Unpacker(bytes);
+export async function loadCsptUnpackerFromBytes(_extensionUri: vscode.Uri, bytes: Uint8Array): Promise<CsptUnpacker> {
+	return new Unpacker(bytes);
 }
 
-export async function readAssignmentData(workspaceFolder: vscode.WorkspaceFolder | undefined): Promise<CsptAssignmentData | undefined> {
-	if (!workspaceFolder) {
+export async function readAssignmentData(root: AssignmentRoot | undefined): Promise<CsptAssignmentData | undefined> {
+	if (!root) {
 		return undefined;
 	}
-	const uri = assignmentDataUri(workspaceFolder);
+	const uri = assignmentDataUri(root);
 	if (!await exists(uri)) {
 		return undefined;
 	}
 	return JSON.parse(decoder.decode(await vscode.workspace.fs.readFile(uri))) as CsptAssignmentData;
 }
 
-export async function writeAssignmentData(workspaceFolder: vscode.WorkspaceFolder, data: CsptAssignmentData): Promise<void> {
-	await vscode.workspace.fs.writeFile(assignmentDataUri(workspaceFolder), encoder.encode(`${JSON.stringify(data, null, 2)}\n`));
+export async function writeAssignmentData(root: AssignmentRoot, data: CsptAssignmentData): Promise<void> {
+	await vscode.workspace.fs.writeFile(assignmentDataUri(root), encoder.encode(`${JSON.stringify(data, null, 2)}\n`));
 }
 
-export function assignmentDataUri(workspaceFolder: vscode.WorkspaceFolder): vscode.Uri {
-	return vscode.Uri.joinPath(workspaceFolder.uri, assignmentDataFileName);
+export function assignmentDataUri(root: AssignmentRoot): vscode.Uri {
+	return vscode.Uri.joinPath(root.uri, assignmentDataFileName);
 }
 
-export function assignmentPath(workspaceFolder: vscode.WorkspaceFolder, path: string): vscode.Uri {
-	return vscode.Uri.joinPath(workspaceFolder.uri, ...path.split('/').filter(Boolean));
+export function assignmentPath(root: AssignmentRoot, path: string): vscode.Uri {
+	return vscode.Uri.joinPath(root.uri, ...path.split('/').filter(Boolean));
 }

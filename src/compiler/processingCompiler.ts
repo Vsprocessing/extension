@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { CreateCompilerOptions } from '../../lib/teavm-javac/teavm-javac.js';
+import type { CreateCompilerOptions } from '@worldeditaxe/teavm-javac';
 import type { BuildOutputKind, ProcessingOutputTarget } from '../core/types';
 import { TeaVmPackage } from './teavmPackage';
 import {

@@ -1,28 +1,12 @@
 import * as vscode from 'vscode';
+import { load as loadJdt } from 'eclipse-jdt-ls-web';
+import type { WebJdtLsApi } from 'eclipse-jdt-ls-web';
+import { loadCsptAssignment, readAssignmentData } from '../assignment/assignmentLoader';
+import type { ValidatorCheck } from '../assignment/types';
 import { collectSources, identifyEntrypoint, isInWorkspaceFolder, isJavaUri, isProcessingUri, type WorkspaceSource } from '../utils';
 
 declare function setTimeout(handler: (...args: unknown[]) => void, timeout?: number): unknown;
 declare function clearTimeout(handle: unknown): void;
-
-const importModule = new Function('specifier', 'return import(specifier);') as <T>(specifier: string) => Promise<T>;
-
-interface JdtWasmExports {
-	readonly lint: (uri: string, source: string) => string;
-	readonly lintProcessing: (entrypointUri: string, entrypointSource: string, additionalPdesJson: string) => string;
-	readonly handle: (payload: string) => string;
-}
-
-interface JdtWasmInstance {
-	readonly exports: JdtWasmExports;
-}
-
-interface JdtWasmGlobal {
-	readonly TeaVM?: {
-		readonly wasmGC?: {
-			readonly load: (wasm: Uint8Array) => Promise<JdtWasmInstance>;
-		};
-	};
-}
 
 interface LspPosition {
 	readonly line: number;
@@ -121,7 +105,7 @@ interface LspSignatureHelp {
 export class ProcessingLinter implements vscode.Disposable {
 	private readonly disposables: vscode.Disposable[] = [];
 	private readonly diagnostics = vscode.languages.createDiagnosticCollection('webprocessing');
-	private jdtWasm: Promise<JdtWasmExports> | undefined;
+	private jdtWasm: Promise<WebJdtLsApi> | undefined;
 	private lintTimer: unknown;
 	private linting = false;
 	private pendingJava = false;
@@ -360,6 +344,7 @@ export class ProcessingLinter implements vscode.Disposable {
 
 	private async collectJavaWorkspaceSources(): Promise<WorkspaceSource[]> {
 		const sources = [...(await collectSources('java')).sources];
+		sources.push(...await this.collectAssignmentClasspathSources());
 
 		for (const document of vscode.workspace.textDocuments) {
 			if (!isJavaUri(document.uri)) {
@@ -377,6 +362,70 @@ export class ProcessingLinter implements vscode.Disposable {
 		}
 
 		return sources;
+	}
+
+	private async collectAssignmentClasspathSources(): Promise<WorkspaceSource[]> {
+		const result: WorkspaceSource[] = [];
+		const seen = new Set<string>();
+		for (const workspaceFolder of vscode.workspace.workspaceFolders ?? []) {
+			const assignment = await this.workspaceAssignment(workspaceFolder);
+			if (!assignment) {
+				continue;
+			}
+			for (const check of assignment.checks) {
+				if (check.type !== 'validator') {
+					continue;
+				}
+				for (const source of this.validatorClasspathSources(assignment.id, check)) {
+					const key = source.path;
+					if (!seen.has(key)) {
+						seen.add(key);
+						result.push(source);
+					}
+				}
+			}
+		}
+		return result;
+	}
+
+	private async workspaceAssignment(workspaceFolder: vscode.WorkspaceFolder) {
+		const data = await readAssignmentData(workspaceFolder);
+		if (!data?.bundleUri) {
+			return undefined;
+		}
+		try {
+			return await loadCsptAssignment(this.context.extensionUri, vscode.Uri.parse(data.bundleUri));
+		} catch {
+			return undefined;
+		}
+	}
+
+	private validatorClasspathSources(assignmentId: string, check: ValidatorCheck): WorkspaceSource[] {
+		const result: WorkspaceSource[] = [];
+		for (const rawPath of check.classpath ?? []) {
+			const path = this.normalizedClasspathPath(rawPath);
+			if (!path || !path.toLowerCase().endsWith('.java')) {
+				continue;
+			}
+			const content = check.files[path] ?? check.files[rawPath];
+			if (content === undefined) {
+				continue;
+			}
+			result.push({
+				uri: vscode.Uri.from({ scheme: 'cspt-classpath', path: `/${assignmentId}/${path}` }),
+				path,
+				content
+			});
+		}
+		return result;
+	}
+
+	private normalizedClasspathPath(path: string): string | undefined {
+		const normalized = path.replace(/\\/g, '/').replace(/^\/+/, '').replace(/^\.\//, '');
+		if (!normalized || normalized.split('/').some(segment => !segment || segment === '.' || segment === '..')) {
+			return undefined;
+		}
+		return normalized;
 	}
 
 	private async collectProcessingWorkspaceSources(workspaceFolder: vscode.WorkspaceFolder): Promise<WorkspaceSource[]> {
@@ -464,6 +513,17 @@ export class ProcessingLinter implements vscode.Disposable {
 	private async requestJdt<T>(document: vscode.TextDocument, method: string, position: vscode.Position, params?: object): Promise<T | undefined> {
 		const jdt = await this.loadJdtWasm();
 		const uri = this.jdtDocumentUri(document);
+		for (const source of await this.collectJavaWorkspaceSources()) {
+			const sourceUri = this.jdtSourceUri(source);
+			jdt.handle(JSON.stringify({
+				jsonrpc: '2.0',
+				method: 'java/browserJdtLs/workspaceSources',
+				params: {
+					uri: sourceUri,
+					text: source.content
+				}
+			}));
+		}
 		jdt.handle(JSON.stringify({
 			jsonrpc: '2.0',
 			method: 'java/browserJdtLs/workspaceSources',
@@ -676,28 +736,18 @@ export class ProcessingLinter implements vscode.Disposable {
 		return response;
 	}
 
-	private async loadJdtWasm(): Promise<JdtWasmExports> {
+	private async loadJdtWasm(): Promise<WebJdtLsApi> {
 		if (!this.jdtWasm) {
 			this.jdtWasm = this.doLoadJdtWasm();
 		}
 		return this.jdtWasm;
 	}
 
-	private async doLoadJdtWasm(): Promise<JdtWasmExports> {
-		await importModule(this.jdtAssetImportUri('classes.wasm-runtime.js'));
-		const teavm = (globalThis as unknown as JdtWasmGlobal).TeaVM?.wasmGC;
-		if (!teavm) {
-			throw new Error('TeaVM Wasm-GC runtime is unavailable.');
-		}
-		const instance = await teavm.load(await vscode.workspace.fs.readFile(this.jdtAssetUri('classes.wasm')));
-		return instance.exports;
+	private async doLoadJdtWasm(): Promise<WebJdtLsApi> {
+		return loadJdt({ baseUrl: this.jdtBaseUri().toString() });
 	}
 
-	private jdtAssetUri(name: string): vscode.Uri {
-		return vscode.Uri.joinPath(this.context.extensionUri, 'lib', 'eclipse.jdt.ls-wasm', name);
-	}
-
-	private jdtAssetImportUri(name: string): string {
-		return this.jdtAssetUri(name).toString();
+	private jdtBaseUri(): vscode.Uri {
+		return vscode.Uri.joinPath(this.context.extensionUri, 'node_modules', 'eclipse-jdt-ls-web');
 	}
 }
